@@ -119,9 +119,12 @@ chrome.tabs.onUpdated.addListener((tabId, change) => {
   if (frames.has(tabId) && (change.title || change.url)) schedulePush();
 });
 
-// 확장을 설치·업데이트하기 전부터 열려 있던 탭에는 content script가 없다. 직접 넣어 준다.
+// 확장을 설치·새로고침하기 전부터 열려 있던 탭에는 살아 있는 content script가 없다.
+// 물어봐서 대답이 없는 탭에만 넣는다(겹치면 명령이 두 번 실행된다).
 async function injectExistingTabs() {
   for (const tab of await chrome.tabs.query({ url: ['http://*/*', 'https://*/*'] })) {
+    const alive = await chrome.tabs.sendMessage(tab.id, { type: 'ping' }).then(() => true, () => false);
+    if (alive) continue;
     chrome.scripting.executeScript({
       target: { tabId: tab.id, allFrames: true },
       files: ['media-actions.js', 'content.js'],
@@ -129,6 +132,7 @@ async function injectExistingTabs() {
   }
 }
 chrome.runtime.onInstalled.addListener(injectExistingTabs);
+chrome.runtime.onStartup.addListener(injectExistingTabs);
 
 // 앱이 나중에 켜져도 다시 붙도록 주기적으로 깨운다.
 chrome.alarms.create('reconnect', { periodInMinutes: 0.5 });

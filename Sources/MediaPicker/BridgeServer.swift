@@ -142,7 +142,11 @@ final class BridgeServer {
             conn.browser = message.browser ?? "Chrome"
             Log.write("bridge: \(conn.browser) extension connected")
         case "state":
-            conn.tabs = message.tabs ?? []
+            let tabs = message.tabs ?? []
+            if tabs.count != conn.tabs.count {
+                Log.write("bridge: \(conn.browser) media tabs \(conn.tabs.count) → \(tabs.count)")
+            }
+            conn.tabs = tabs
         default:
             break
         }

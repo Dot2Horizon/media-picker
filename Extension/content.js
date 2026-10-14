@@ -1,9 +1,5 @@
 // 페이지 안의 소리 나는 미디어 상태를 확장 백그라운드로 알리고, 재생·정지 명령을 받는다.
 (() => {
-  // 선언된 content script와 설치 직후 주입한 것이 겹치면 명령이 두 번 실행된다.
-  if (window.__mediaPickerLoaded) return;
-  window.__mediaPickerLoaded = true;
-
   const SELECTOR = 'video,audio';
   let lastPlayed = null;
 
@@ -20,7 +16,11 @@
     const media = pick();
     const state = media ? (media.paused ? 'paused' : 'playing') : 'none';
     const volume = media ? Math.round(media.volume * 100) : null;
-    chrome.runtime.sendMessage({ type: 'media', state, volume }).catch(() => {});
+    try {
+      chrome.runtime.sendMessage({ type: 'media', state, volume }).catch(() => {});
+    } catch {
+      // 확장을 새로고침하면 이 스크립트는 끊긴 채 남는다. 새 스크립트가 대신 일한다.
+    }
   }
 
   for (const type of ['play', 'pause', 'ended', 'emptied', 'loadedmetadata', 'volumechange']) {
@@ -30,7 +30,8 @@
     }, true);
   }
 
-  chrome.runtime.onMessage.addListener((message) => {
+  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+    if (message.type === 'ping') sendResponse('pong');
     if (message.type === 'probe') report();
     if (message.type !== 'command') return;
     if (message.action === 'pause') {
