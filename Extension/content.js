@@ -1,5 +1,9 @@
 // 페이지 안의 소리 나는 미디어 상태를 확장 백그라운드로 알리고, 재생·정지 명령을 받는다.
 (() => {
+  // 선언된 content script와 설치 직후 주입한 것이 겹치면 명령이 두 번 실행된다.
+  if (window.__mediaPickerLoaded) return;
+  window.__mediaPickerLoaded = true;
+
   const SELECTOR = 'video,audio';
   let lastPlayed = null;
 

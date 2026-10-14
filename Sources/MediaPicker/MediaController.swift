@@ -57,7 +57,7 @@ final class MediaController {
             acc.warnings += r.warnings
         }
         // 정지 직후에도 잠깐 소리 출력이 남으므로, 항목을 낸 앱은 재생 여부와 관계없이 제외한다.
-        var handled = Set(result.items.map(\.bundleID))
+        var handled = Set(result.items.map(\.bundleID)).union(bridge.connectedBundleIDs)
         if !browsersScanned { handled.formUnion(scriptedBrowserIDs) }
         result.items += soundingApps.scan(excluding: handled)
         if let playing = result.items.first(where: { $0.state == .playing }), playing.id != lastTarget {
@@ -93,8 +93,9 @@ final class MediaController {
             let playing = items.filter { $0.state == .playing }
             if !playing.isEmpty {
                 Log.write("short press: pause \(playing.map(\.id))")
-                self.pause(playing)
+                // 먼저 기억해 둔다. 시스템 키가 엉뚱한 앱으로 가면 pause()가 이 기억을 지운다.
                 self.lastTarget = playing[0].id
+                self.pause(playing)
             } else if let last = self.lastTarget, last.hasPrefix(SoundingAppProvider.idPrefix) {
                 // 소리로만 알던 앱은 멈추면 목록에서 사라진다. 시스템 키로 다시 재생한다.
                 Log.write("short press: resume \(last) via system key")
@@ -139,7 +140,28 @@ final class MediaController {
     private func pause(_ items: [MediaItem]) {
         let viaSystemKey = items.filter { $0.id.hasPrefix(SoundingAppProvider.idPrefix) }
         items.filter { !$0.id.hasPrefix(SoundingAppProvider.idPrefix) }.forEach { $0.perform(.pause) }
-        viaSystemKey.first?.perform(.pause)
+        if let item = viaSystemKey.first { pauseViaSystemKey(item) }
+    }
+
+    /// 시스템 키는 macOS가 '지금 재생 중'으로 아는 앱에 간다. 엉뚱한 앱(예: 멈춰 있던 Spotify)이
+    /// 받으면 그 앱이 재생되므로, 보낸 뒤 확인해서 새로 켜진 앱은 바로 다시 멈춘다. Script.queue 위에서 호출.
+    private func pauseViaSystemKey(_ item: MediaItem) {
+        let before = scan(players + [extensionTabs], browsersScanned: false).items
+        let wasPlaying = Set(before.filter { $0.state == .playing }.map(\.id))
+        item.perform(.pause)
+        Thread.sleep(forTimeInterval: 0.8)
+        let after = scan(players + [extensionTabs], browsersScanned: false).items
+        let misrouted = after.filter {
+            $0.state == .playing && !wasPlaying.contains($0.id) && !$0.id.hasPrefix(SoundingAppProvider.idPrefix)
+        }
+        for wrong in misrouted {
+            Log.write("system key misrouted to \(wrong.id); pausing it again")
+            wrong.perform(.pause)
+        }
+        if !misrouted.isEmpty {
+            // 원래 대상은 시스템 키로 멈출 수 없었다. 다음 F8이 엉뚱한 앱을 다시 켜지 않게 기억을 지운다.
+            lastTarget = nil
+        }
     }
 
     /// 선택 창에서 고른 항목: 재생 중이면 정지, 멈춰 있으면 다른 것을 멈추고 이걸 재생.
@@ -153,7 +175,9 @@ final class MediaController {
                 self.pause(items.filter { $0.state == .playing && $0.id != item.id })
                 item.perform(.play)
             }
-            self.lastTarget = item.id
+            if item.state != .playing || !item.id.hasPrefix(SoundingAppProvider.idPrefix) {
+                self.lastTarget = item.id
+            }
         }
     }
 }

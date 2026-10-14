@@ -24,6 +24,14 @@ function tabState(tabId) {
 async function pushState() {
   if (socket?.readyState !== WebSocket.OPEN) return;
   const tabs = [];
+  // 영상/오디오 요소 없이 소리를 내는 탭(번역기 음성, Web Audio 등)도 크롬은 audible로 알려준다.
+  const audible = await chrome.tabs.query({ audible: true });
+  for (const tab of audible) {
+    if (tabState(tab.id)) continue;
+    // 음소거해도 audible은 남는다. 우리가 음소거한 탭은 '정지'로 보여준다.
+    const state = mutedByUs.has(tab.id) ? 'paused' : 'playing';
+    tabs.push({ id: tab.id, title: tab.title || '', url: tab.url || '', state });
+  }
   for (const tabId of frames.keys()) {
     const state = tabState(tabId);
     if (!state) continue;
@@ -51,15 +59,35 @@ function connect() {
   };
   socket.onmessage = (event) => {
     const message = JSON.parse(event.data);
-    if (message.type === 'command') {
-      chrome.tabs.sendMessage(message.tabId, { type: 'command', action: message.action }).catch(() => {});
-    }
+    if (message.type === 'command') runCommand(message.tabId, message.action);
   };
   socket.onclose = () => {
     socket = null;
     setTimeout(connect, 3000);
   };
   socket.onerror = () => {};
+}
+
+/** 정지가 안 먹혀 우리가 음소거한 탭. 다시 재생할 때 음소거를 푼다. */
+const mutedByUs = new Set();
+
+async function runCommand(tabId, action) {
+  if (action === 'play' && mutedByUs.has(tabId)) {
+    mutedByUs.delete(tabId);
+    chrome.tabs.update(tabId, { muted: false }).catch(() => {});
+  }
+  chrome.tabs.sendMessage(tabId, { type: 'command', action }).catch(() => {});
+  if (action !== 'pause') return;
+  // 영상/오디오 요소가 아닌 소리(Web Audio 등)는 멈출 수 없다. 계속 소리가 나면 탭을 음소거한다.
+  // audible은 소리가 멈춘 뒤에도 2초쯤 남으므로 충분히 기다리고, 요소가 멈춘 탭은 건너뛴다.
+  setTimeout(async () => {
+    const tab = await chrome.tabs.get(tabId).catch(() => null);
+    if (tab?.audible && !tab.mutedInfo?.muted && tabState(tabId) !== 'paused') {
+      mutedByUs.add(tabId);
+      await chrome.tabs.update(tabId, { muted: true }).catch(() => {});
+      schedulePush();
+    }
+  }, 3000);
 }
 
 // 서비스 워커가 새로 깨어나면 상태를 잃으므로 모든 탭에 다시 물어본다.
@@ -85,8 +113,20 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 
 chrome.tabs.onUpdated.addListener((tabId, change) => {
   if (change.status === 'loading') frames.delete(tabId);
+  if ('audible' in change) schedulePush();
   if (frames.has(tabId) && (change.title || change.url)) schedulePush();
 });
+
+// 확장을 설치·업데이트하기 전부터 열려 있던 탭에는 content script가 없다. 직접 넣어 준다.
+async function injectExistingTabs() {
+  for (const tab of await chrome.tabs.query({ url: ['http://*/*', 'https://*/*'] })) {
+    chrome.scripting.executeScript({
+      target: { tabId: tab.id, allFrames: true },
+      files: ['media-actions.js', 'content.js'],
+    }).catch(() => {});
+  }
+}
+chrome.runtime.onInstalled.addListener(injectExistingTabs);
 
 // 앱이 나중에 켜져도 다시 붙도록 주기적으로 깨운다.
 chrome.alarms.create('reconnect', { periodInMinutes: 0.5 });

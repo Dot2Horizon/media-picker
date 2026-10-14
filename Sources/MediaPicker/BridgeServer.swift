@@ -84,6 +84,11 @@ final class BridgeServer {
 
     var connectedBrowsers: Set<String> { Set(snapshot().map(\.browser)) }
 
+    /// 확장으로 연결된 브라우저의 번들 ID. 이 브라우저들은 시스템 키 대신 확장으로만 조작한다.
+    var connectedBundleIDs: Set<String> {
+        Set(connectedBrowsers.compactMap { ExtensionProvider.bundleIDs[$0] })
+    }
+
     func command(_ client: ObjectIdentifier, tab: Int, action: MediaAction) {
         queue.async {
             guard let conn = self.connections[client] else { return }
