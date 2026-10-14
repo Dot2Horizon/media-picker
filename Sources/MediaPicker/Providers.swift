@@ -79,6 +79,54 @@ struct PlayerAppProvider: MediaProvider {
     }
 }
 
+// MARK: - VLC
+
+struct VLCProvider: MediaProvider {
+    let bundleID = "org.videolan.vlc"
+
+    func scan() -> ScanResult {
+        guard isRunning(bundleID) else { return ScanResult() }
+        let source = """
+        tell application id "\(bundleID)"
+            set p to playing
+            set t to ""
+            try
+                set t to name of current item
+            end try
+        end tell
+        return (p as string) & linefeed & t
+        """
+        switch Script.run(source) {
+        case .failure(let error):
+            return ScanResult(warnings: [error.hint(app: "VLC")])
+        case .success(let output):
+            let parts = output.components(separatedBy: "\n")
+            let state: PlayState = parts[0] == "true" ? .playing : .paused
+            let title = parts.count > 1 ? parts[1] : ""
+            if title.isEmpty && state == .paused { return ScanResult() }
+            let bundleID = bundleID
+            let item = MediaItem(
+                id: bundleID,
+                bundleID: bundleID,
+                title: title.isEmpty ? "VLC" : title,
+                subtitle: "VLC",
+                state: state,
+                perform: { action in
+                    // VLC의 play는 재생/일시정지 토글이다.
+                    let command = switch action {
+                    case .play: "if not playing then play"
+                    case .pause: "if playing then play"
+                    case .next: "next"
+                    case .previous: "previous"
+                    }
+                    Script.run("tell application id \"\(bundleID)\" to \(command)")
+                }
+            )
+            return ScanResult(items: [item])
+        }
+    }
+}
+
 // MARK: - 브라우저 탭
 
 enum PageJS {

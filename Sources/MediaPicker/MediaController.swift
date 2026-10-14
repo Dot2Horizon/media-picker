@@ -5,6 +5,13 @@ final class MediaController {
     private let players: [MediaProvider] = [
         PlayerAppProvider(bundleID: "com.spotify.client", appName: "Spotify"),
         PlayerAppProvider(bundleID: "com.apple.Music", appName: "Music"),
+        PlayerAppProvider(bundleID: "com.apple.TV", appName: "TV"),
+        VLCProvider(),
+    ]
+    private let soundingApps = SoundingAppProvider()
+    private let scriptedBrowserIDs: Set<String> = [
+        "com.google.Chrome", "company.thebrowser.Browser", "com.brave.Browser",
+        "com.microsoft.edgemac", "com.apple.Safari",
     ]
     /// AppleScript 경로. 확장이 연결된 브라우저는 건너뛴다.
     private let scriptedBrowsers: [(name: String, provider: MediaProvider)] = [
@@ -21,7 +28,7 @@ final class MediaController {
         self.bridge = bridge
         self.extensionTabs = ExtensionProvider(bridge: bridge)
     }
-    private var playerIDs: Set<String> { ["com.spotify.client", "com.apple.Music"] }
+    private var playerIDs: Set<String> { ["com.spotify.client", "com.apple.Music", "com.apple.TV", "org.videolan.vlc"] }
 
     /// 마지막으로 재생 중이던(또는 고른) 대상. 아무것도 재생 중이 아닐 때 F8이 이걸 다시 재생한다.
     private var lastTarget: String?
@@ -36,17 +43,23 @@ final class MediaController {
     func startPolling(interval: TimeInterval = 3) {
         pollTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
             guard let self else { return }
-            Script.queue.async { _ = self.scan(self.players + [self.extensionTabs]) }
+            Script.queue.async { _ = self.scan(self.players + [self.extensionTabs], browsersScanned: false) }
         }
     }
 
-    private func scan(_ providers: [MediaProvider]) -> ScanResult {
+    /// `browsersScanned`가 false면(가벼운 폴링) 브라우저 탭을 훑지 않았으므로,
+    /// 브라우저 소리를 '알 수 없는 앱'으로 오해하지 않게 제외한다.
+    private func scan(_ providers: [MediaProvider], browsersScanned: Bool = true) -> ScanResult {
         let start = Date()
-        let result = providers.reduce(into: ScanResult()) { acc, provider in
+        var result = providers.reduce(into: ScanResult()) { acc, provider in
             let r = provider.scan()
             acc.items += r.items
             acc.warnings += r.warnings
         }
+        // 정지 직후에도 잠깐 소리 출력이 남으므로, 항목을 낸 앱은 재생 여부와 관계없이 제외한다.
+        var handled = Set(result.items.map(\.bundleID))
+        if !browsersScanned { handled.formUnion(scriptedBrowserIDs) }
+        result.items += soundingApps.scan(excluding: handled)
         if let playing = result.items.first(where: { $0.state == .playing }), playing.id != lastTarget {
             lastTarget = playing.id
             Log.write("now playing: \(playing.id) \(playing.title)")
@@ -80,8 +93,12 @@ final class MediaController {
             let playing = items.filter { $0.state == .playing }
             if !playing.isEmpty {
                 Log.write("short press: pause \(playing.map(\.id))")
-                playing.forEach { $0.perform(.pause) }
+                self.pause(playing)
                 self.lastTarget = playing[0].id
+            } else if let last = self.lastTarget, last.hasPrefix(SoundingAppProvider.idPrefix) {
+                // 소리로만 알던 앱은 멈추면 목록에서 사라진다. 시스템 키로 다시 재생한다.
+                Log.write("short press: resume \(last) via system key")
+                DispatchQueue.main.async { MediaKeyTap.postSystemKey(MediaKeyTap.playKey) }
             } else if let target = items.first(where: { $0.id == self.lastTarget })
                         ?? items.first(where: { self.playerIDs.contains($0.id) }) {
                 // 기억한 대상이 없으면 브라우저 탭보다 음악 앱을 먼저 고른다.
@@ -118,6 +135,13 @@ final class MediaController {
         }
     }
 
+    /// 시스템 키로만 조작하는 앱은 여러 개여도 키를 한 번만 보낸다(두 번이면 다시 재생된다).
+    private func pause(_ items: [MediaItem]) {
+        let viaSystemKey = items.filter { $0.id.hasPrefix(SoundingAppProvider.idPrefix) }
+        items.filter { !$0.id.hasPrefix(SoundingAppProvider.idPrefix) }.forEach { $0.perform(.pause) }
+        viaSystemKey.first?.perform(.pause)
+    }
+
     /// 선택 창에서 고른 항목: 재생 중이면 정지, 멈춰 있으면 다른 것을 멈추고 이걸 재생.
     func choose(_ item: MediaItem, among items: [MediaItem]) {
         Script.queue.async {
@@ -126,7 +150,7 @@ final class MediaController {
                 item.perform(.pause)
             } else {
                 Log.write("picker: play \(item.id)")
-                items.filter { $0.state == .playing && $0.id != item.id }.forEach { $0.perform(.pause) }
+                self.pause(items.filter { $0.state == .playing && $0.id != item.id })
                 item.perform(.play)
             }
             self.lastTarget = item.id
