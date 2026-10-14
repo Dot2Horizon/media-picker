@@ -128,6 +128,11 @@ final class MediaController {
         }
     }
 
+    func setVolume(_ item: MediaItem, to value: Int) {
+        guard let set = item.setVolume else { return }
+        Script.queue.async { set(value) }
+    }
+
     /// 선택 창에서 F7/F9로 강조된 항목만 넘긴다.
     func skip(_ action: MediaAction, item: MediaItem) {
         Script.queue.async {

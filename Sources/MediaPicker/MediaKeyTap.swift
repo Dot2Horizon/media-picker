@@ -1,6 +1,7 @@
 import Cocoa
 
 /// 미디어키(F7 이전 · F8 재생/일시정지 · F9 다음)를 가로채 시스템 대신 처리한다.
+/// 볼륨 키(F10 음소거 · F11/F12)는 `interceptVolume`이 true일 때(선택 창이 열려 있을 때)만 가로챈다.
 /// 이벤트 탭은 메인 런루프에서 돌기 때문에 콜백도 메인 스레드에서 불린다.
 final class MediaKeyTap {
     static let playKey = 16     // NX_KEYTYPE_PLAY
@@ -9,13 +10,18 @@ final class MediaKeyTap {
     // 애플 키보드의 F9/F7은 FAST/REWIND로 오기도 한다.
     private static let fastKey = 19
     private static let rewindKey = 20
+    private static let soundUpKey = 0   // NX_KEYTYPE_SOUND_UP
+    private static let soundDownKey = 1 // NX_KEYTYPE_SOUND_DOWN
+    private static let muteKey = 7      // NX_KEYTYPE_MUTE
 
-    enum Key { case playPause, next, previous }
+    enum Key { case playPause, next, previous, volumeUp, volumeDown, mute }
     /// 우리가 직접 다시 보내는 이벤트를 표시해, 탭이 그 이벤트를 또 잡지 않게 한다.
     static let syntheticMarker: Int64 = 0x4D50_4B52
 
-    var onDown: ((Key) -> Void)?
+    /// isRepeat: 키를 누르고 있어 반복되는 이벤트인지
+    var onDown: ((Key, _ isRepeat: Bool) -> Void)?
     var onUp: ((Key) -> Void)?
+    var interceptVolume: () -> Bool = { false }
 
     private var tap: CFMachPort?
 
@@ -61,13 +67,16 @@ final class MediaKeyTap {
         case Self.playKey: key = .playPause
         case Self.nextKey, Self.fastKey: key = .next
         case Self.previousKey, Self.rewindKey: key = .previous
+        case Self.soundUpKey where interceptVolume(): key = .volumeUp
+        case Self.soundDownKey where interceptVolume(): key = .volumeDown
+        case Self.muteKey where interceptVolume(): key = .mute
         default: return Unmanaged.passUnretained(event)
         }
 
         let isDown = ((flags & 0xFF00) >> 8) == 0xA
         let isRepeat = (flags & 0x1) == 1
         if isDown {
-            if !isRepeat { onDown?(key) }
+            onDown?(key, isRepeat)
         } else {
             onUp?(key)
         }

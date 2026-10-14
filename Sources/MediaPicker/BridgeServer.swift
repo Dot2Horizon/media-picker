@@ -12,6 +12,7 @@ final class BridgeServer {
         let title: String
         let url: String
         let state: String
+        let volume: Int?
     }
 
     struct Client {
@@ -87,6 +88,13 @@ final class BridgeServer {
     /// 확장으로 연결된 브라우저의 번들 ID. 이 브라우저들은 시스템 키 대신 확장으로만 조작한다.
     var connectedBundleIDs: Set<String> {
         Set(connectedBrowsers.compactMap { ExtensionProvider.bundleIDs[$0] })
+    }
+
+    func setVolume(_ client: ObjectIdentifier, tab: Int, value: Int) {
+        queue.async {
+            guard let conn = self.connections[client] else { return }
+            self.send(["type": "command", "tabId": tab, "action": "volume", "value": value], to: conn.nw)
+        }
     }
 
     func command(_ client: ObjectIdentifier, tab: Int, action: MediaAction) {
@@ -170,7 +178,9 @@ struct ExtensionProvider: MediaProvider {
                     title: tab.title,
                     subtitle: "\(client.browser) · \(host(tab.url))",
                     state: tab.state == "playing" ? .playing : .paused,
-                    perform: { action in bridge.command(client.key, tab: tab.id, action: action) }
+                    perform: { action in bridge.command(client.key, tab: tab.id, action: action) },
+                    volume: tab.volume,
+                    setVolume: tab.volume == nil ? nil : { value in bridge.setVolume(client.key, tab: tab.id, value: value) }
                 )
             }
         }

@@ -12,6 +12,10 @@ struct MediaItem: Identifiable {
     let state: PlayState
     /// Script.queue 위에서 호출해야 한다.
     let perform: (MediaAction) -> Void
+    /// 0–100. nil이면 이 항목은 볼륨을 조절할 수 없다.
+    var volume: Int? = nil
+    /// Script.queue 위에서 호출해야 한다.
+    var setVolume: ((Int) -> Void)? = nil
 }
 
 struct ScanResult {
@@ -41,12 +45,16 @@ struct PlayerAppProvider: MediaProvider {
             set s to player state as string
             set t to ""
             set a to ""
+            set v to ""
             try
                 set t to name of current track
                 set a to artist of current track
             end try
+            try
+                set v to sound volume as string
+            end try
         end tell
-        return s & linefeed & t & linefeed & a
+        return s & linefeed & t & linefeed & a & linefeed & v
         """
         switch Script.run(source) {
         case .failure(let error):
@@ -56,6 +64,7 @@ struct PlayerAppProvider: MediaProvider {
             let state: PlayState = parts[0] == "playing" ? .playing : .paused
             let title = parts.count > 1 ? parts[1] : ""
             let artist = parts.count > 2 ? parts[2] : ""
+            let volume = parts.count > 3 ? Int(parts[3]) : nil
             if title.isEmpty && state == .paused { return ScanResult() }
             let bundleID = bundleID
             let item = MediaItem(
@@ -72,6 +81,10 @@ struct PlayerAppProvider: MediaProvider {
                     case .previous: "previous track"
                     }
                     Script.run("tell application id \"\(bundleID)\" to \(command)")
+                },
+                volume: volume,
+                setVolume: volume == nil ? nil : { value in
+                    Script.run("tell application id \"\(bundleID)\" to set sound volume to \(value)")
                 }
             )
             return ScanResult(items: [item])
@@ -90,11 +103,15 @@ struct VLCProvider: MediaProvider {
         tell application id "\(bundleID)"
             set p to playing
             set t to ""
+            set v to ""
             try
                 set t to name of current item
             end try
+            try
+                set v to audio volume as string
+            end try
         end tell
-        return (p as string) & linefeed & t
+        return (p as string) & linefeed & t & linefeed & v
         """
         switch Script.run(source) {
         case .failure(let error):
@@ -103,6 +120,8 @@ struct VLCProvider: MediaProvider {
             let parts = output.components(separatedBy: "\n")
             let state: PlayState = parts[0] == "true" ? .playing : .paused
             let title = parts.count > 1 ? parts[1] : ""
+            // VLC의 audio volume은 256이 100%다.
+            let volume = parts.count > 2 ? Int(parts[2]).map { min(100, $0 * 100 / 256) } : nil
             if title.isEmpty && state == .paused { return ScanResult() }
             let bundleID = bundleID
             let item = MediaItem(
@@ -120,6 +139,10 @@ struct VLCProvider: MediaProvider {
                     case .previous: "previous"
                     }
                     Script.run("tell application id \"\(bundleID)\" to \(command)")
+                },
+                volume: volume,
+                setVolume: volume == nil ? nil : { value in
+                    Script.run("tell application id \"\(bundleID)\" to set audio volume to \(value * 256 / 100)")
                 }
             )
             return ScanResult(items: [item])
@@ -131,7 +154,11 @@ struct VLCProvider: MediaProvider {
 
 enum PageJS {
     /// 탭 안의 소리 나는(음소거 아님) 미디어 상태를 "playing|제목" 형태로 돌려준다.
-    static let probe = #"(() => { const m = [...document.querySelectorAll('video,audio')].filter(e => e.duration > 0 && !e.muted); if (!m.length) return ''; const e = m.find(e => !e.paused) || m[0]; return (e.paused ? 'paused' : 'playing') + '|' + document.title.replace(/\s+/g, ' '); })()"#
+    static let probe = #"(() => { const m = [...document.querySelectorAll('video,audio')].filter(e => e.duration > 0 && !e.muted); if (!m.length) return ''; const e = m.find(e => !e.paused) || m[0]; return (e.paused ? 'paused' : 'playing') + '|' + Math.round(e.volume * 100) + '|' + document.title.replace(/\s+/g, ' '); })()"#
+
+    static func setVolume(_ value: Int) -> String {
+        "(() => { document.querySelectorAll('video,audio').forEach(e => { e.volume = \(value) / 100; }); return 'ok'; })()"
+    }
 
     static func action(_ action: MediaAction) -> String {
         switch action {
@@ -153,14 +180,14 @@ enum PageJS {
     }()
 }
 
-/// 스캔 스크립트 출력 한 줄: 창id \t 탭키 \t URL \t 상태|제목
-private func parseTabLines(_ output: String) -> [(window: String, tab: String, url: String, state: PlayState, title: String)] {
+/// 스캔 스크립트 출력 한 줄: 창id \t 탭키 \t URL \t 상태|볼륨|제목
+private func parseTabLines(_ output: String) -> [(window: String, tab: String, url: String, state: PlayState, volume: Int?, title: String)] {
     output.split(separator: "\n").compactMap { line in
         let cols = line.split(separator: "\t", maxSplits: 3, omittingEmptySubsequences: false).map(String.init)
         guard cols.count == 4 else { return nil }
-        let probe = cols[3].split(separator: "|", maxSplits: 1, omittingEmptySubsequences: false).map(String.init)
-        guard probe.count == 2 else { return nil }
-        return (cols[0], cols[1], cols[2], probe[0] == "playing" ? .playing : .paused, probe[1])
+        let probe = cols[3].split(separator: "|", maxSplits: 2, omittingEmptySubsequences: false).map(String.init)
+        guard probe.count == 3 else { return nil }
+        return (cols[0], cols[1], cols[2], probe[0] == "playing" ? .playing : .paused, Int(probe[1]), probe[2])
     }
 }
 
@@ -214,6 +241,10 @@ struct ChromiumProvider: MediaProvider {
                     state: tab.state,
                     perform: { action in
                         Script.run("tell application id \"\(bundleID)\" to execute (tab id \(tab.tab) of window id \(tab.window)) javascript \(Script.quote(PageJS.action(action)))")
+                    },
+                    volume: tab.volume,
+                    setVolume: { value in
+                        Script.run("tell application id \"\(bundleID)\" to execute (tab id \(tab.tab) of window id \(tab.window)) javascript \(Script.quote(PageJS.setVolume(value)))")
                     }
                 )
             }
@@ -268,6 +299,10 @@ struct SafariProvider: MediaProvider {
                     state: tab.state,
                     perform: { action in
                         Script.run("tell application id \"\(bundleID)\" to do JavaScript \(Script.quote(PageJS.action(action))) in tab \(tab.tab) of window id \(tab.window)")
+                    },
+                    volume: tab.volume,
+                    setVolume: { value in
+                        Script.run("tell application id \"\(bundleID)\" to do JavaScript \(Script.quote(PageJS.setVolume(value))) in tab \(tab.tab) of window id \(tab.window)")
                     }
                 )
             }

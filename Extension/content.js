@@ -19,7 +19,8 @@
   function report() {
     const media = pick();
     const state = media ? (media.paused ? 'paused' : 'playing') : 'none';
-    chrome.runtime.sendMessage({ type: 'media', state }).catch(() => {});
+    const volume = media ? Math.round(media.volume * 100) : null;
+    chrome.runtime.sendMessage({ type: 'media', state, volume }).catch(() => {});
   }
 
   for (const type of ['play', 'pause', 'ended', 'emptied', 'loadedmetadata', 'volumechange']) {
@@ -34,6 +35,8 @@
     if (message.type !== 'command') return;
     if (message.action === 'pause') {
       document.querySelectorAll(SELECTOR).forEach((e) => e.pause());
+    } else if (message.action === 'volume') {
+      document.querySelectorAll(SELECTOR).forEach((e) => { e.volume = message.value / 100; });
     } else if (message.action === 'next' || message.action === 'previous') {
       mediaPickerSkip(message.action); // media-actions.js
     } else {

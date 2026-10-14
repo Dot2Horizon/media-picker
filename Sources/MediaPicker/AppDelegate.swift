@@ -22,11 +22,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         setupStatusItem()
         bridge.start()
         controller.startPolling()
-        tap.onDown = { [weak self] key in
+        tap.interceptVolume = { [weak self] in self?.picker.isOpen ?? false }
+        tap.onDown = { [weak self] key, isRepeat in
+            guard let self else { return }
             switch key {
-            case .playPause: self?.keyDown()
-            case .next: self?.skip(.next)
-            case .previous: self?.skip(.previous)
+            // 볼륨은 누르고 있으면 계속 바뀌게, 나머지는 한 번만
+            case .volumeUp: self.picker.adjustVolume(by: 10)
+            case .volumeDown: self.picker.adjustVolume(by: -10)
+            case _ where isRepeat: break
+            case .playPause: self.keyDown()
+            case .next: self.skip(.next)
+            case .previous: self.skip(.previous)
+            case .mute: self.picker.toggleMute()
             }
         }
         tap.onUp = { [weak self] key in
@@ -110,6 +117,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(withTitle: "F8 짧게: 재생 중인 것 정지 / 마지막 것 재개", action: nil, keyEquivalent: "")
         menu.addItem(withTitle: "F8 길게: 재생할 미디어 선택", action: nil, keyEquivalent: "")
         menu.addItem(withTitle: "F7 / F9: 재생 중인 미디어의 이전 / 다음", action: nil, keyEquivalent: "")
+        menu.addItem(withTitle: "선택 창에서 F10 / F11 / F12: 그 항목만 음소거 / 볼륨", action: nil, keyEquivalent: "")
         menu.addItem(.separator())
         menu.addItem(withTitle: "선택 창 열기", action: #selector(openPicker), keyEquivalent: "p").target = self
         menu.addItem(withTitle: "브라우저 확장 설치…", action: #selector(installExtension), keyEquivalent: "").target = self

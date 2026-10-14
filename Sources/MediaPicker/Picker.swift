@@ -23,6 +23,11 @@ final class PickerController: NSObject, NSWindowDelegate {
     /// 손을 떼고 가만히 두면 아무것도 하지 않고 닫는다.
     private let idleTimeout: TimeInterval = 4
     private var idleTimer: Timer?
+    /// 음소거 전 볼륨 (항목 id → 볼륨)
+    private var volumeBeforeMute: [String: Int] = [:]
+    /// 방금 바꾼 볼륨. 플레이어가 새 값을 반영하기 전의 갱신이 막대를 되돌리지 않게 잠시 우선한다.
+    private var recentVolumeEdits: [String: (value: Int, at: Date)] = [:]
+    private var lastVolumeSend = Date.distantPast
 
     var isOpen: Bool { panel?.isVisible ?? false }
 
@@ -94,6 +99,59 @@ final class PickerController: NSObject, NSWindowDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in self?.refresh() }
     }
 
+    // MARK: - 볼륨
+
+    /// F11/F12: 강조된 항목을 10% 단위로. 현재 값을 10의 배수로 맞춘 뒤 움직인다
+    /// (Spotify는 설정값보다 1 낮게 돌려주는 일이 있어 그대로 더하면 어긋난다).
+    func adjustVolume(by delta: Int) {
+        touch()
+        guard let item = selectedItem, let current = item.volume else { return }
+        let snapped = Int((Double(current) / 10).rounded()) * 10
+        applyVolume(min(100, max(0, snapped + delta)), to: item)
+    }
+
+    /// F10: 강조된 항목만 음소거/해제
+    func toggleMute() {
+        touch()
+        guard let item = selectedItem, let current = item.volume else { return }
+        if current > 0 {
+            volumeBeforeMute[item.id] = current
+            applyVolume(0, to: item)
+        } else {
+            applyVolume(volumeBeforeMute.removeValue(forKey: item.id) ?? 50, to: item)
+        }
+    }
+
+    /// 막대를 끌 때. 너무 잦은 전송은 건너뛰고, 손을 뗄 때는 꼭 보낸다.
+    fileprivate func dragVolume(_ value: Int, index: Int, ended: Bool) {
+        touch()
+        guard model.items.indices.contains(index), model.items[index].volume != nil else { return }
+        model.selection = index
+        let item = model.items[index]
+        if ended || Date().timeIntervalSince(lastVolumeSend) > 0.08 {
+            applyVolume(value, to: item)
+        } else {
+            setLocalVolume(value, id: item.id)
+        }
+    }
+
+    private var selectedItem: MediaItem? {
+        model.items.indices.contains(model.selection) ? model.items[model.selection] : nil
+    }
+
+    private func applyVolume(_ value: Int, to item: MediaItem) {
+        setLocalVolume(value, id: item.id)
+        lastVolumeSend = Date()
+        controller.setVolume(item, to: value)
+    }
+
+    private func setLocalVolume(_ value: Int, id: String) {
+        recentVolumeEdits[id] = (value, Date())
+        if let index = model.items.firstIndex(where: { $0.id == id }) {
+            model.items[index].volume = value
+        }
+    }
+
     private func refresh() {
         guard isOpen, !model.loading, !refreshing else { return }
         refreshing = true
@@ -107,6 +165,11 @@ final class PickerController: NSObject, NSWindowDelegate {
             let fresh = Dictionary(result.items.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
             var merged = self.model.items.compactMap { fresh[$0.id] }
             merged += result.items.filter { item in !merged.contains { $0.id == item.id } }
+            for index in merged.indices {
+                if let edit = self.recentVolumeEdits[merged[index].id], Date().timeIntervalSince(edit.at) < 1.5 {
+                    merged[index].volume = edit.value
+                }
+            }
             self.model.items = merged
             self.model.warnings = result.warnings
             if let selectedID, let index = merged.firstIndex(where: { $0.id == selectedID }) {
@@ -160,7 +223,11 @@ final class PickerController: NSObject, NSWindowDelegate {
         panel.backgroundColor = .clear
         panel.hasShadow = true
         panel.delegate = self
-        panel.contentView = NSHostingView(rootView: PickerView(model: model, onPick: { [weak self] in self?.pick($0) }))
+        panel.contentView = NSHostingView(rootView: PickerView(
+            model: model,
+            onPick: { [weak self] in self?.pick($0) },
+            onVolume: { [weak self] value, index, ended in self?.dragVolume(value, index: index, ended: ended) }
+        ))
         return panel
     }
 
@@ -186,6 +253,7 @@ final class PickerController: NSObject, NSWindowDelegate {
 private struct PickerView: View {
     @ObservedObject var model: PickerModel
     let onPick: (Int) -> Void
+    let onVolume: (_ value: Int, _ index: Int, _ ended: Bool) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -207,7 +275,8 @@ private struct PickerView: View {
             }
 
             ForEach(Array(model.items.enumerated()), id: \.element.id) { index, item in
-                PickerRow(index: index, item: item, selected: index == model.selection)
+                PickerRow(index: index, item: item, selected: index == model.selection,
+                          onVolume: { value, ended in onVolume(value, index, ended) })
                     .contentShape(Rectangle())
                     .onTapGesture { onPick(index) }
             }
@@ -220,7 +289,7 @@ private struct PickerView: View {
                     .padding(.horizontal, 8)
             }
 
-            Text("F8 짧게 이동 · F8 길게 재생/정지 · F7·F9 이전·다음 · 가만히 두면 닫힘")
+            Text("F8 짧게 이동 · 길게 재생/정지 · F7·F9 이전·다음 · F10·F11·F12 볼륨")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 8)
@@ -236,18 +305,20 @@ private struct PickerRow: View {
     let index: Int
     let item: MediaItem
     let selected: Bool
+    let onVolume: (_ value: Int, _ ended: Bool) -> Void
 
     var body: some View {
         HStack(spacing: 10) {
             Image(nsImage: appIcon(item.bundleID))
                 .resizable()
                 .frame(width: 28, height: 28)
-            VStack(alignment: .leading, spacing: 1) {
+            VStack(alignment: .leading, spacing: 3) {
                 Text(item.title).lineLimit(1)
                 Text(item.subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                VolumeBar(volume: item.volume, highlighted: selected, onChange: onVolume)
             }
             Spacer(minLength: 8)
-            Image(systemName: item.state == .playing ? "speaker.wave.2.fill" : "pause.fill")
+            Image(systemName: item.state == .paused ? "pause.fill" : item.volume == 0 ? "speaker.slash.fill" : "speaker.wave.2.fill")
                 .foregroundStyle(item.state == .playing ? Color.accentColor : .secondary)
             if index < 9 {
                 Text("\(index + 1)")
@@ -260,6 +331,47 @@ private struct PickerRow: View {
         .padding(.vertical, 6)
         .background(selected ? Color.accentColor.opacity(0.18) : .clear,
                     in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+}
+
+/// 볼륨 막대. 끌거나 눌러서 바꿀 수 있다. 조절할 수 없는 항목은 회색 빈 막대.
+private struct VolumeBar: View {
+    let volume: Int?
+    let highlighted: Bool
+    let onChange: (_ value: Int, _ ended: Bool) -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.primary.opacity(0.12))
+                    if let volume {
+                        Capsule()
+                            .fill(highlighted ? Color.accentColor : Color.secondary)
+                            .frame(width: geo.size.width * CGFloat(volume) / 100)
+                    }
+                }
+                .contentShape(Rectangle())
+                .gesture(volume == nil ? nil : DragGesture(minimumDistance: 0)
+                    .onChanged { onChange(value(at: $0.location.x, width: geo.size.width), false) }
+                    .onEnded { onChange(value(at: $0.location.x, width: geo.size.width), true) })
+            }
+            .frame(height: 5)
+            Text(label)
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .frame(width: 44, alignment: .trailing)
+        }
+        .animation(.easeOut(duration: 0.12), value: volume)
+    }
+
+    private var label: String {
+        guard let volume else { return "—" }
+        return volume == 0 ? "음소거" : "\(volume)%"
+    }
+
+    private func value(at x: CGFloat, width: CGFloat) -> Int {
+        Int((min(max(x / width, 0), 1) * 100).rounded())
     }
 }
 

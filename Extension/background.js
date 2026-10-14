@@ -1,7 +1,7 @@
 // 탭별 미디어 상태를 모아 MediaPicker 앱(127.0.0.1)에 보내고, 앱의 명령을 탭에 전달한다.
 const APP_URL = 'ws://127.0.0.1:17872';
 
-/** tabId -> Map(frameId -> 'playing' | 'paused') */
+/** tabId -> Map(frameId -> { state: 'playing' | 'paused', volume }) */
 const frames = new Map();
 let socket = null;
 let pushTimer = null;
@@ -14,11 +14,13 @@ function browserName() {
   return 'Chrome';
 }
 
+function tabInfo(tabId) {
+  const infos = [...(frames.get(tabId)?.values() || [])];
+  return infos.find((i) => i.state === 'playing') || infos.find((i) => i.state === 'paused') || null;
+}
+
 function tabState(tabId) {
-  const states = [...(frames.get(tabId)?.values() || [])];
-  if (states.includes('playing')) return 'playing';
-  if (states.includes('paused')) return 'paused';
-  return null;
+  return tabInfo(tabId)?.state || null;
 }
 
 async function pushState() {
@@ -30,14 +32,14 @@ async function pushState() {
     if (tabState(tab.id)) continue;
     // 음소거해도 audible은 남는다. 우리가 음소거한 탭은 '정지'로 보여준다.
     const state = mutedByUs.has(tab.id) ? 'paused' : 'playing';
-    tabs.push({ id: tab.id, title: tab.title || '', url: tab.url || '', state });
+    tabs.push({ id: tab.id, title: tab.title || '', url: tab.url || '', state, volume: null });
   }
   for (const tabId of frames.keys()) {
-    const state = tabState(tabId);
-    if (!state) continue;
+    const info = tabInfo(tabId);
+    if (!info) continue;
     try {
       const tab = await chrome.tabs.get(tabId);
-      tabs.push({ id: tabId, title: tab.title || '', url: tab.url || '', state });
+      tabs.push({ id: tabId, title: tab.title || '', url: tab.url || '', state: info.state, volume: info.volume });
     } catch {
       frames.delete(tabId);
     }
@@ -59,7 +61,7 @@ function connect() {
   };
   socket.onmessage = (event) => {
     const message = JSON.parse(event.data);
-    if (message.type === 'command') runCommand(message.tabId, message.action);
+    if (message.type === 'command') runCommand(message.tabId, message.action, message.value);
   };
   socket.onclose = () => {
     socket = null;
@@ -71,12 +73,12 @@ function connect() {
 /** 정지가 안 먹혀 우리가 음소거한 탭. 다시 재생할 때 음소거를 푼다. */
 const mutedByUs = new Set();
 
-async function runCommand(tabId, action) {
+async function runCommand(tabId, action, value) {
   if (action === 'play' && mutedByUs.has(tabId)) {
     mutedByUs.delete(tabId);
     chrome.tabs.update(tabId, { muted: false }).catch(() => {});
   }
-  chrome.tabs.sendMessage(tabId, { type: 'command', action }).catch(() => {});
+  chrome.tabs.sendMessage(tabId, { type: 'command', action, value }).catch(() => {});
   if (action !== 'pause') return;
   // 영상/오디오 요소가 아닌 소리(Web Audio 등)는 멈출 수 없다. 계속 소리가 나면 탭을 음소거한다.
   // audible은 소리가 멈춘 뒤에도 2초쯤 남으므로 충분히 기다리고, 요소가 멈춘 탭은 건너뛴다.
@@ -102,7 +104,7 @@ chrome.runtime.onMessage.addListener((message, sender) => {
   const tabId = sender.tab.id;
   if (!frames.has(tabId)) frames.set(tabId, new Map());
   if (message.state === 'none') frames.get(tabId).delete(sender.frameId);
-  else frames.get(tabId).set(sender.frameId, message.state);
+  else frames.get(tabId).set(sender.frameId, { state: message.state, volume: message.volume });
   schedulePush();
 });
 
