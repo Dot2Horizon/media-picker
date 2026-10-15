@@ -49,4 +49,4 @@ and the app accepts connections only from browser extensions. No analytics, no n
 
 ## License
 
-MIT
+MIT. A personal project — issues and PRs are welcome, but support is best effort.

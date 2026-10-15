@@ -49,4 +49,4 @@ macOS 14 이상, Apple Silicon·Intel 모두 지원.
 
 ## 라이선스
 
-MIT
+MIT. 개인 프로젝트라 이슈·PR은 환영하지만 지원은 가능한 범위에서만 합니다.
