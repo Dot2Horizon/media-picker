@@ -7,6 +7,8 @@ let socket = null;
 let pushTimer = null;
 
 function browserName() {
+  // 사파리에는 userAgentData가 없다.
+  if (!navigator.userAgentData && /Safari/.test(navigator.userAgent) && !/Chrom/.test(navigator.userAgent)) return 'Safari';
   const brands = (navigator.userAgentData?.brands || []).map((b) => b.brand).join(' ');
   if (/Edge/.test(brands)) return 'Edge';
   if (/Brave/.test(brands)) return 'Brave';
@@ -27,7 +29,8 @@ async function pushState() {
   if (socket?.readyState !== WebSocket.OPEN) return;
   const tabs = [];
   // 영상/오디오 요소 없이 소리를 내는 탭(번역기 음성, Web Audio 등)도 크롬은 audible로 알려준다.
-  const audible = await chrome.tabs.query({ audible: true });
+  // 사파리는 audible 조건을 모를 수 있다. 그때는 요소가 있는 탭만 보고한다.
+  const audible = await chrome.tabs.query({ audible: true }).then((t) => t.filter((tab) => tab.audible === true), () => []);
   for (const tab of audible) {
     if (tabState(tab.id)) continue;
     // 음소거해도 audible은 남는다. 우리가 음소거한 탭은 '정지'로 보여준다.

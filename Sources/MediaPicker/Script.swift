@@ -7,10 +7,10 @@ struct ScriptError: Error {
     /// 사용자에게 보여줄 해결 방법
     func hint(app: String) -> String {
         if code == -1743 {
-            return "\(app): 자동화 권한이 필요합니다 (시스템 설정 › 개인정보 보호 및 보안 › 자동화)"
+            return L("%@: Automation permission required (System Settings › Privacy & Security › Automation)", app)
         }
         if message.localizedCaseInsensitiveContains("JavaScript") || message.contains("자바스크립트") {
-            return "\(app): MediaPicker 브라우저 확장을 설치하세요 (메뉴바 › 브라우저 확장 설치…)"
+            return L("%@: Install the MediaPicker browser extension (menu bar › Install Browser Extension…)", app)
         }
         return "\(app): \(message)"
     }
@@ -23,13 +23,13 @@ enum Script {
     @discardableResult
     static func run(_ source: String) -> Result<String, ScriptError> {
         guard let script = NSAppleScript(source: source) else {
-            return .failure(ScriptError(message: "스크립트 생성 실패", code: 0))
+            return .failure(ScriptError(message: "could not create script", code: 0))
         }
         var error: NSDictionary?
         let output = script.executeAndReturnError(&error)
         if let error {
             return .failure(ScriptError(
-                message: error[NSAppleScript.errorMessage] as? String ?? "알 수 없는 오류",
+                message: error[NSAppleScript.errorMessage] as? String ?? "unknown error",
                 code: error[NSAppleScript.errorNumber] as? Int ?? 0
             ))
         }

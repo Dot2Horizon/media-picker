@@ -170,6 +170,7 @@ struct ExtensionProvider: MediaProvider {
         "Brave": "com.brave.Browser",
         "Opera": "com.operasoftware.Opera",
         "Arc": "company.thebrowser.Browser",
+        "Safari": "com.apple.Safari",
     ]
 
     func scan() -> ScanResult {

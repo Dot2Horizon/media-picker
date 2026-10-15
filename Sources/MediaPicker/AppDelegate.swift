@@ -1,7 +1,9 @@
 import Cocoa
+import SafariServices
 import ServiceManagement
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+    static let safariExtensionID = "com.ian.mediapicker.safari"
     private let bridge = BridgeServer()
     private lazy var controller = MediaController(bridge: bridge)
     private let tap = MediaKeyTap()
@@ -114,21 +116,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         let menu = NSMenu()
         menu.delegate = self
-        menu.addItem(withTitle: "F8 짧게: 재생 중인 것 정지 / 마지막 것 재개", action: nil, keyEquivalent: "")
-        menu.addItem(withTitle: "F8 길게: 재생할 미디어 선택", action: nil, keyEquivalent: "")
-        menu.addItem(withTitle: "F7 / F9: 재생 중인 미디어의 이전 / 다음", action: nil, keyEquivalent: "")
-        menu.addItem(withTitle: "선택 창에서 F10 / F11 / F12: 그 항목만 음소거 / 볼륨", action: nil, keyEquivalent: "")
+        menu.addItem(withTitle: L("F8 tap: pause what's playing / resume the last one"), action: nil, keyEquivalent: "")
+        menu.addItem(withTitle: L("F8 hold: choose what to play"), action: nil, keyEquivalent: "")
+        menu.addItem(withTitle: L("F7 / F9: previous / next for what's playing"), action: nil, keyEquivalent: "")
+        menu.addItem(withTitle: L("In the picker, F10 / F11 / F12: mute / volume for that item"), action: nil, keyEquivalent: "")
         menu.addItem(.separator())
-        menu.addItem(withTitle: "선택 창 열기", action: #selector(openPicker), keyEquivalent: "p").target = self
-        menu.addItem(withTitle: "브라우저 확장 설치…", action: #selector(installExtension), keyEquivalent: "").target = self
-        loginItem = menu.addItem(withTitle: "로그인 시 실행", action: #selector(toggleLogin), keyEquivalent: "")
+        menu.addItem(withTitle: L("Open Picker"), action: #selector(openPicker), keyEquivalent: "p").target = self
+        menu.addItem(withTitle: L("Install Browser Extension…"), action: #selector(installExtension), keyEquivalent: "").target = self
+        loginItem = menu.addItem(withTitle: L("Launch at Login"), action: #selector(toggleLogin), keyEquivalent: "")
         loginItem.target = self
         menu.addItem(.separator())
         statusLine = menu.addItem(withTitle: "", action: nil, keyEquivalent: "")
-        menu.addItem(withTitle: "손쉬운 사용 권한 설정…", action: #selector(openAccessibility), keyEquivalent: "").target = self
-        menu.addItem(withTitle: "로그 보기", action: #selector(openLog), keyEquivalent: "").target = self
+        menu.addItem(withTitle: L("Accessibility Permission…"), action: #selector(openAccessibility), keyEquivalent: "").target = self
+        menu.addItem(withTitle: L("Show Log"), action: #selector(openLog), keyEquivalent: "").target = self
         menu.addItem(.separator())
-        menu.addItem(withTitle: "종료", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        menu.addItem(withTitle: L("Quit MediaPicker"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         statusItem.menu = menu
     }
 
@@ -136,9 +138,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         loginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
         let browsers = bridge.connectedBrowsers.sorted()
         let parts = [
-            tap.isRunning ? "F8 ✓" : "F8 ✗ 권한 필요",
-            browsers.isEmpty ? "확장 연결 없음" : "확장: \(browsers.joined(separator: ", "))",
-            String(format: "스캔 %.2f초", controller.lastScanSeconds),
+            tap.isRunning ? "F8 ✓" : L("F8 ✗ needs permission"),
+            browsers.isEmpty ? L("No extension connected") : L("Extension: %@", browsers.joined(separator: ", ")),
+            L("Scan %.2fs", controller.lastScanSeconds),
         ]
         statusLine.title = parts.joined(separator: "  ·  ")
     }
@@ -147,7 +149,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let ok = tap.isRunning
         let symbol = ok ? "playpause.fill" : "exclamationmark.triangle"
         statusItem.button?.image = NSImage(systemSymbolName: symbol, accessibilityDescription: "MediaPicker")
-        statusItem.button?.toolTip = ok ? "MediaPicker" : "MediaPicker: 손쉬운 사용 권한이 필요합니다"
+        statusItem.button?.toolTip = ok ? "MediaPicker" : L("MediaPicker needs Accessibility permission")
     }
 
     @objc private func openPicker() {
@@ -155,9 +157,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         DispatchQueue.main.async { self.picker.show() }
     }
 
-    /// 앱에 들어 있는 확장을 고정된 위치로 복사해 두고, 크롬 확장 페이지와 함께 연다.
-    /// ('압축해제된 확장 프로그램 로드'는 폴더 경로를 기억하므로 앱을 옮겨도 안 깨지게)
+    /// 사파리는 앱에 든 확장(.appex)을 켜기만 하면 되고, 크롬 계열은 압축해제된 확장을 직접 로드해야 한다.
     @objc private func installExtension() {
+        let alert = NSAlert()
+        alert.messageText = L("Install Browser Extension")
+        alert.informativeText = L("With the extension, MediaPicker controls each browser tab directly. You don't need to allow JavaScript from Apple Events.")
+        alert.addButton(withTitle: L("Chrome, Edge, Brave, Arc…"))
+        alert.addButton(withTitle: L("Safari…"))
+        alert.addButton(withTitle: L("Cancel"))
+        NSApp.activate(ignoringOtherApps: true)
+        switch alert.runModal() {
+        case .alertFirstButtonReturn: installChromiumExtension()
+        case .alertSecondButtonReturn: openSafariExtension()
+        default: break
+        }
+    }
+
+    private func openSafariExtension() {
+        SFSafariApplication.showPreferencesForExtension(withIdentifier: Self.safariExtensionID) { error in
+            if let error { Log.write("safari extension settings failed \(error)") }
+        }
+    }
+
+    /// 앱에 들어 있는 확장을 고정된 위치로 복사해 두고, 그 폴더를 보여 준다.
+    /// ('압축해제된 확장 프로그램 로드'는 폴더 경로를 기억하므로 앱을 옮겨도 안 깨지게)
+    private func installChromiumExtension() {
         guard let source = Bundle.main.url(forResource: "Extension", withExtension: nil) else { return }
         let target = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support/MediaPicker/Extension")
@@ -172,16 +196,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NSWorkspace.shared.activateFileViewerSelecting([target])
 
         let alert = NSAlert()
-        alert.messageText = "브라우저 확장 설치"
-        alert.informativeText = """
-        1. 크롬 주소창에 chrome://extensions 입력
-        2. 오른쪽 위 '개발자 모드' 켜기
-        3. '압축해제된 확장 프로그램 로드' → 방금 열린 Extension 폴더 선택
-
-        Edge·Brave·Arc도 같은 방법으로 설치할 수 있습니다.
-        설치하면 'Apple Events의 JavaScript 허용'은 필요 없습니다.
-        """
-        alert.addButton(withTitle: "확인")
+        alert.messageText = L("Install in Chrome, Edge, Brave or Arc")
+        alert.informativeText = L("1. Go to chrome://extensions\n2. Turn on Developer mode (top right)\n3. Click Load unpacked and choose the Extension folder that just opened")
+        alert.addButton(withTitle: L("OK"))
         NSApp.activate(ignoringOtherApps: true)
         alert.runModal()
     }

@@ -75,7 +75,7 @@ struct SoundingAppProvider {
                 id: Self.idPrefix + bundleID,
                 bundleID: bundleID,
                 title: name,
-                subtitle: "소리 재생 중 · 시스템 미디어키로 조작",
+                subtitle: L("Playing sound · controlled with the system media key"),
                 state: .playing,
                 perform: { action in
                     let key = switch action {

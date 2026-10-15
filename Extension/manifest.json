@@ -1,7 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "MediaPicker Bridge",
-  "description": "MediaPicker 맥 앱이 탭의 미디어를 재생·정지할 수 있게 연결합니다.",
+  "name": "__MSG_name__",
+  "description": "__MSG_description__",
+  "default_locale": "en",
   "version": "0.1.0",
   "permissions": ["tabs", "alarms", "scripting"],
   "host_permissions": ["<all_urls>"],

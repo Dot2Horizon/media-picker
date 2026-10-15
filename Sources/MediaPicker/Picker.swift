@@ -257,7 +257,7 @@ private struct PickerView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("재생할 미디어 선택")
+            Text(L("Choose what to play"))
                 .font(.headline)
                 .padding(.horizontal, 8)
                 .padding(.bottom, 4)
@@ -265,11 +265,11 @@ private struct PickerView: View {
             if model.loading {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
-                    Text("찾는 중…").foregroundStyle(.secondary)
+                    Text(L("Searching…")).foregroundStyle(.secondary)
                 }
                 .padding(8)
             } else if model.items.isEmpty {
-                Text("감지된 미디어가 없습니다")
+                Text(L("No media found"))
                     .foregroundStyle(.secondary)
                     .padding(8)
             }
@@ -289,7 +289,7 @@ private struct PickerView: View {
                     .padding(.horizontal, 8)
             }
 
-            Text("F8 짧게 이동 · 길게 재생/정지 · F7·F9 이전·다음 · F10·F11·F12 볼륨")
+            Text(L("F8 tap: next · hold: play/pause · F7·F9 skip · F10–F12 volume"))
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 8)
@@ -367,7 +367,7 @@ private struct VolumeBar: View {
 
     private var label: String {
         guard let volume else { return "—" }
-        return volume == 0 ? "음소거" : "\(volume)%"
+        return volume == 0 ? L("Muted") : "\(volume)%"
     }
 
     private func value(at x: CGFloat, width: CGFloat) -> Int {
